@@ -1,0 +1,192 @@
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.text.NumberFormat;
+import java.text.ParseException;
+import java.util.List;
+import java.util.Locale;
+
+public class GastoApp extends JFrame {
+    private JTextField descricaoField;
+    private JTextField valorField;
+    private JLabel totalLabel;
+    private JTable tabela;
+    private DefaultTableModel modeloTabela;
+
+    private Usuario usuarioLogado;
+    private GastoDAO gastoDAO;
+
+    public GastoApp(Usuario usuario) {
+        this.usuarioLogado = usuario;
+        this.gastoDAO = new GastoDAO();
+
+        setTitle("Controle de Gastos - " + usuarioLogado.getNome());
+        setSize(600, 400);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLocationRelativeTo(null);
+
+        JPanel painel = new JPanel(new BorderLayout(5, 5));
+
+        JPanel entrada = new JPanel(new GridLayout(2, 2, 5, 5));
+        entrada.add(new JLabel("Descrição:"));
+        descricaoField = new JTextField();
+        entrada.add(descricaoField);
+
+        entrada.add(new JLabel("Valor (R$):"));
+        valorField = new JTextField();
+        entrada.add(valorField);
+
+        painel.add(entrada, BorderLayout.NORTH);
+
+        JPanel botoesPanel = new JPanel();
+        JButton adicionarBtn = new JButton("Adicionar");
+        JButton removerBtn = new JButton("Remover");
+        JButton editarBtn = new JButton("Editar");
+        botoesPanel.add(adicionarBtn);
+        botoesPanel.add(removerBtn);
+        botoesPanel.add(editarBtn);
+        painel.add(botoesPanel, BorderLayout.SOUTH);
+
+        modeloTabela = new DefaultTableModel(new String[]{"ID", "Descrição", "Valor (R$)"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false; // tabela não editável diretamente
+            }
+        };
+        tabela = new JTable(modeloTabela);
+        tabela.getColumnModel().getColumn(0).setMinWidth(0);
+        tabela.getColumnModel().getColumn(0).setMaxWidth(0); // Esconde coluna ID
+        painel.add(new JScrollPane(tabela), BorderLayout.CENTER);
+
+        totalLabel = new JLabel("Total: R$ 0,00");
+        totalLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        painel.add(totalLabel, BorderLayout.EAST);
+
+        adicionarBtn.addActionListener(e -> adicionarGasto());
+        removerBtn.addActionListener(e -> removerGasto());
+        editarBtn.addActionListener(e -> editarGasto());
+
+        add(painel);
+
+        carregarGastos();
+
+        setVisible(true);
+    }
+
+    private void carregarGastos() {
+        modeloTabela.setRowCount(0);
+        List<Gasto> gastos = gastoDAO.listarPorUsuario(usuarioLogado.getId());
+        for (Gasto g : gastos) {
+            modeloTabela.addRow(new Object[]{g.getId(), g.getDescricao(), String.format("R$ %.2f", g.getValor()).replace('.', ',')});
+        }
+        atualizarTotal();
+    }
+
+    private void adicionarGasto() {
+        String descricao = descricaoField.getText().trim();
+        String valorTexto = valorField.getText().trim();
+
+        if (descricao.isEmpty() || valorTexto.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Preencha todos os campos.");
+            return;
+        }
+
+        try {
+            double valor = parseValor(valorTexto);
+            Gasto gasto = new Gasto(usuarioLogado.getId(), descricao, valor);
+            if (gastoDAO.adicionar(gasto)) {
+                modeloTabela.addRow(new Object[]{gasto.getId(), gasto.getDescricao(), String.format("R$ %.2f", gasto.getValor()).replace('.', ',')});
+                atualizarTotal();
+                descricaoField.setText("");
+                valorField.setText("");
+            } else {
+                JOptionPane.showMessageDialog(this, "Erro ao adicionar gasto.");
+            }
+        } catch (ParseException ex) {
+            JOptionPane.showMessageDialog(this, "Digite um valor numérico válido no formato brasileiro (ex: 1234,56).");
+        }
+    }
+
+    private void removerGasto() {
+        int linha = tabela.getSelectedRow();
+        if (linha >= 0) {
+            int idGasto = (int) modeloTabela.getValueAt(linha, 0);
+            int confirm = JOptionPane.showConfirmDialog(this, "Deseja remover este gasto?", "Confirmar", JOptionPane.YES_NO_OPTION);
+            if (confirm == JOptionPane.YES_OPTION) {
+                if (gastoDAO.remover(idGasto)) {
+                    modeloTabela.removeRow(linha);
+                    atualizarTotal();
+                } else {
+                    JOptionPane.showMessageDialog(this, "Erro ao remover gasto.");
+                }
+            }
+        } else {
+            JOptionPane.showMessageDialog(this, "Selecione um gasto para remover.");
+        }
+    }
+
+    private void editarGasto() {
+        int linha = tabela.getSelectedRow();
+        if (linha >= 0) {
+            int idGasto = (int) modeloTabela.getValueAt(linha, 0);
+            String descricaoAtual = (String) modeloTabela.getValueAt(linha, 1);
+            String valorAtualStr = (String) modeloTabela.getValueAt(linha, 2);
+            valorAtualStr = valorAtualStr.replace("R$ ", "").replace('.', ',');
+
+            String novaDescricao = JOptionPane.showInputDialog(this, "Nova descrição:", descricaoAtual);
+            if (novaDescricao == null || novaDescricao.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Descrição não pode ser vazia.");
+                return;
+            }
+
+            String novoValorStr = JOptionPane.showInputDialog(this, "Novo valor (R$):", valorAtualStr);
+            if (novoValorStr == null || novoValorStr.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Valor não pode ser vazio.");
+                return;
+            }
+
+            try {
+                double novoValor = parseValor(novoValorStr);
+                Gasto gasto = new Gasto();
+                gasto.setId(idGasto);
+                gasto.setUsuarioId(usuarioLogado.getId());
+                gasto.setDescricao(novaDescricao.trim());
+                gasto.setValor(novoValor);
+
+                if (gastoDAO.atualizar(gasto)) {
+                    modeloTabela.setValueAt(novaDescricao, linha, 1);
+                    modeloTabela.setValueAt(String.format("R$ %.2f", novoValor).replace('.', ','), linha, 2);
+                    atualizarTotal();
+                } else {
+                    JOptionPane.showMessageDialog(this, "Erro ao atualizar gasto.");
+                }
+            } catch (ParseException e) {
+                JOptionPane.showMessageDialog(this, "Valor inválido no formato brasileiro.");
+            }
+        } else {
+            JOptionPane.showMessageDialog(this, "Selecione um gasto para editar.");
+        }
+    }
+
+    private void atualizarTotal() {
+        double total = 0;
+        for (int i = 0; i < modeloTabela.getRowCount(); i++) {
+            String valorStr = (String) modeloTabela.getValueAt(i, 2);
+            try {
+                total += parseValor(valorStr);
+            } catch (ParseException e) {
+                // Caso dê erro, ignora essa linha
+            }
+        }
+        totalLabel.setText(String.format("Total: R$ %.2f", total).replace('.', ','));
+    }
+
+    private double parseValor(String valorStr) throws ParseException {
+        // Remove símbolo R$ e espaços, mas mantém pontos e vírgulas para o NumberFormat
+        String valorLimpo = valorStr.replace("R$", "").replace(" ", "").trim();
+
+        NumberFormat format = NumberFormat.getInstance(new Locale("pt", "BR"));
+        Number number = format.parse(valorLimpo);
+        return number.doubleValue();
+    }
+}
